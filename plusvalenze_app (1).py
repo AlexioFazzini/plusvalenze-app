@@ -1,23 +1,22 @@
-import streamlit as st
+# plusvalenze_app.py
+# App Streamlit per calcolare il netto incasso dopo imposte su plusvalenze (Italia)
+# v1.1 – header con logo + payoff ALLINEA, FIFO lotti, commissioni, compensazione minusvalenze per bucket 12,5%/26%
 
-# ...subito sotto st.set_page_config(...)
-
-# Mostra il logo se presente
-try:
-    st.image("logo.png", width=180)
-except Exception:
-    st.caption("")
-
-st.markdown("### ALLINEA – Il tuo punto fermo nei momenti che contano")
-st.caption("by Alexio Fazzini, Consulente Finanziario")
-st.image(logo, width=180)  # puoi regolare la dimensione
-st.markdown("### ALLINEA – Il tuo punto fermo nei momenti che contano")
-st.caption("by Alexio Fazzini, Consulente Finanziario")
 import streamlit as st
 import pandas as pd
 from datetime import datetime
 
 st.set_page_config(page_title="Netto Incasso dopo Plusvalenza – Italia", page_icon="💶", layout="centered")
+
+# ----- Header brand -----
+# Mostra il logo se presente (senza PIL, così non servono dipendenze extra)
+try:
+    st.image("logo.png", width=180)
+except Exception:
+    pass
+
+st.markdown("### ALLINEA – Il tuo punto fermo nei momenti che contano")
+st.caption("by Alexio Fazzini, Consulente Finanziario")
 
 st.title("💶 Netto incasso dopo vendita (Italia)")
 st.caption("Calcola quanto **incassi davvero** dalla vendita di un titolo dopo imposte sulle plusvalenze, con compensazione perdite dove applicabile.")
@@ -33,10 +32,10 @@ with st.expander("📌 Istruzioni rapide", expanded=True):
     4) (Opzionale) Inserisci eventuali **minusvalenze pregresse** disponibili **nello stesso bucket fiscale** della vendita.  
     5) Ottieni **plus/minusvalenza**, **imposta**, **netto incasso** e il residuo di minusvalenze (o la nuova minusvalenza da riportare).
 
-    **Assunzioni principali (v1):**
+    **Assunzioni principali (v1.1):**
     - Metodo **FIFO** per l'abbinamento tra lotti di acquisto e quantità vendute.  
     - Le **commissioni** di acquisto e vendita sono incluse nel calcolo del costo fiscale (ripartite pro-quota).  
-    - Per semplicità, prezzi **clean/dirty** e **ratei** non sono trattati separatamente: inserisci i prezzi coerenti con il tuo estratto conto fiscale.  
+    - Prezzi **clean/dirty** e **ratei** non sono trattati separatamente: inserisci i prezzi coerenti con l'estratto conto fiscale.  
     - La **compensazione** usa solo minusvalenze del **medesimo bucket fiscale** (12,5% o 26%), fino a capienza del realizzo positivo.
     """)
 
@@ -69,7 +68,7 @@ df = st.data_editor(
     key="purchase_table"
 )
 
-# Clean and sort
+# Parse e ordina per data (FIFO)
 def _parse_date(x):
     x = str(x).strip()
     if not x:
@@ -90,7 +89,6 @@ col1, col2 = st.columns(2)
 with col1:
     sell_qty = st.number_input("Quantità **venduta**", min_value=0, step=1, value=100, help="Numero di pezzi venduti.")
     sell_price = st.number_input("Prezzo di **vendita** unitario", min_value=0.0, value=12.00, format="%.4f")
-
 with col2:
     sell_comm = st.number_input("Commissione di vendita (totale)", min_value=0.0, value=0.00, format="%.4f")
     sell_date = st.text_input("Data vendita (facoltativa)", value="")
@@ -104,13 +102,13 @@ available_losses = st.number_input(
 
 # --- Core FIFO & tax logic ---
 
-# Validate sufficient holdings
+# Validazione quantità disponibili
 total_holdings = (df["Quantità"].fillna(0).astype(float)).sum()
 if sell_qty > total_holdings:
     st.error(f"Quantità venduta ({sell_qty}) superiore alla quantità detenuta ({int(total_holdings)}). Riduci la quantità venduta o aggiorna i lotti di acquisto.")
     st.stop()
 
-# Build FIFO queue
+# Crea coda FIFO
 lots = []
 for _, row in df.iterrows():
     qty = int(row.get("Quantità", 0) or 0)
@@ -125,14 +123,13 @@ for _, row in df.iterrows():
         "lot_commission": comm
     })
 
-# Allocate sale quantity across lots (FIFO), and allocate lot commissions pro-rata
+# Alloca vendita sui lotti (FIFO) con riparto commissioni pro-quota
 remaining = sell_qty
 matched_rows = []
 for lot in lots:
     if remaining <= 0:
         break
     take = min(remaining, lot["qty"])
-    # proportional commission allocation by quantity taken vs lot qty
     lot_comm_alloc = (lot["lot_commission"] * (take / lot["qty"])) if lot["qty"] else 0.0
     matched_rows.append({
         "lot_date": lot["date"],
@@ -143,17 +140,15 @@ for lot in lots:
     })
     remaining -= take
 
-# Aggregate cost basis
+# Costo fiscale aggregato
 total_cost_basis = sum(r["cost_basis_for_chunk"] for r in matched_rows)
 
-# Gross proceeds and net proceeds before tax
+# Proventi e P/L
 gross_sale = sell_qty * sell_price
-net_before_tax = gross_sale - sell_comm  # commissions reduce proceeds
-
-# Realized gain/loss before using any carry-forward losses
+net_before_tax = gross_sale - sell_comm  # commissioni riducono il provento
 realized_pnl = net_before_tax - total_cost_basis
 
-# Apply loss offset (only if realized_pnl > 0)
+# Compensazione minusvalenze (solo se plusvalenza)
 loss_used = 0.0
 taxable_gain = 0.0
 if realized_pnl > 0:
@@ -163,26 +158,24 @@ if realized_pnl > 0:
 else:
     tax_due = 0.0
 
-# Net cash received after tax
+# Netto incasso dopo imposte
 net_cash = net_before_tax - (tax_due if tax_due > 0 else 0.0)
 
-# Residual losses to carry forward OR new loss generated
+# Residuo minusvalenze o nuova minusvalenza
 if realized_pnl > 0:
     residual_losses = available_losses - loss_used
     new_carry_loss = 0.0
 else:
     residual_losses = available_losses
-    new_carry_loss = abs(realized_pnl)  # new minusvalenza to carry forward (bucket of this sale)
+    new_carry_loss = abs(realized_pnl)
 
-# --- Output section ---
+# --- Output ---
 st.subheader("✅ Risultati")
-
 colA, colB = st.columns(2)
 with colA:
     st.metric("Provento lordo vendita", f"€ {gross_sale:,.2f}")
     st.metric("Commissione vendita", f"€ {sell_comm:,.2f}")
     st.metric("Costo fiscale complessivo allocato (FIFO)", f"€ {total_cost_basis:,.2f}")
-
 with colB:
     st.metric("Plus/Minusvalenza **prima** di compensazione", f"€ {realized_pnl:,.2f}")
     st.metric("Minusvalenze **utilizzate** in compensazione", f"€ {loss_used:,.2f}")
@@ -200,11 +193,11 @@ with st.expander("ℹ️ Stato minusvalenze / note fiscali"):
         st.write(f"- **Nuova minusvalenza** generata (stesso bucket): **€ {new_carry_loss:,.2f}**")
     st.markdown("""
     **Promemoria operativo (non consulenza fiscale):**
-    - Le minusvalenze **possono essere riportate** entro i termini di legge (in genere fino a 4 anni), **solo all'interno dello stesso bucket fiscale**.  
-    - In regime **amministrato**, la compensazione avviene presso l'intermediario entro il perimetro dei titoli detenuti.  
-    - In regime **dichiarativo**, l'utilizzo delle minusvalenze avviene in dichiarazione nei limiti di capienza e con le regole vigenti.  
-    - Gestisci **clean/dirty price** e **ratei** coerentemente con gli estratti conto fiscali del tuo intermediario.
+    - Le minusvalenze si possono **riportare** entro i termini di legge (in genere fino a 4 anni), **solo nello stesso bucket fiscale**.  
+    - In regime **amministrato**, la compensazione avviene presso l'intermediario.  
+    - In regime **dichiarativo**, l'utilizzo avviene in dichiarazione, nei limiti e con le regole vigenti.  
+    - Gestisci **clean/dirty price** e **ratei** coerenti con gli estratti conto fiscali.
     """)
 
 st.divider()
-st.caption("v1.0 — Questo strumento fornisce un calcolo indicativo per uso informativo. Verifica sempre i conteggi con l'estratto fiscale del tuo intermediario e con il tuo consulente fiscale.")
+st.caption("v1.1 — Strumento informativo. Verifica sempre i conteggi con l'estratto fiscale dell'intermediario e con il consulente fiscale.")
