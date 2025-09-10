@@ -1,4 +1,10 @@
+from PIL import Image
 
+# Carica e mostra il logo
+logo = Image.open("logo.png")
+st.image(logo, width=180)  # puoi regolare la dimensione
+st.markdown("### ALLINEA – Il tuo punto fermo nei momenti che contano")
+st.caption("by Alexio Fazzini, Consulente Finanziario")
 import streamlit as st
 import pandas as pd
 from datetime import datetime
