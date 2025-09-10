@@ -1,7 +1,15 @@
-from PIL import Image
+import streamlit as st
 
-# Carica e mostra il logo
-logo = Image.open("logo.png")
+# ...subito sotto st.set_page_config(...)
+
+# Mostra il logo se presente
+try:
+    st.image("logo.png", width=180)
+except Exception:
+    st.caption("")
+
+st.markdown("### ALLINEA – Il tuo punto fermo nei momenti che contano")
+st.caption("by Alexio Fazzini, Consulente Finanziario")
 st.image(logo, width=180)  # puoi regolare la dimensione
 st.markdown("### ALLINEA – Il tuo punto fermo nei momenti che contano")
 st.caption("by Alexio Fazzini, Consulente Finanziario")
